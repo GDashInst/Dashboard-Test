@@ -1,1 +1,716 @@
-# Dashboard-Test
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UCL Research Culture Delivery Dashboard</title>
+    
+    <!-- ========================================== -->
+    <!-- DEV NOTE: EXTERNAL LIBRARIES & DEPENDENCIES-->
+    <!-- ========================================== -->
+    <!-- Tailwind CSS for rapid utility-first styling without external stylesheets -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React and ReactDOM for component-based UI architecture -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel standalone to compile JSX directly in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide for clean, modern SVG icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- PapaParse for robust client-side CSV parsing (used for the upload features) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    
+    <style>
+        /* DEV NOTE: Importing Inter font to mimic UCL Sans for clean, legible typography */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        
+        body { 
+            font-family: 'Inter', Helvetica, Arial, sans-serif; 
+            background-color: #FFFFFF;
+            color: #000000;
+            -webkit-font-smoothing: antialiased;
+            font-weight: 400;
+        }
+        
+        /* ========================================== */
+        /* DEV NOTE: UCL BRAND COLOUR PALETTE         */
+        /* ========================================== */
+        .bg-ucl-black { background-color: #000000; }
+        .text-ucl-black { color: #000000; }
+        .bg-ucl-dark-blue { background-color: #002855; }
+        .bg-ucl-mid-blue { background-color: #0097D7; }
+        .text-ucl-mid-blue { color: #0097D7; }
+        .border-ucl-mid-blue { border-color: #0097D7; }
+        .bg-ucl-grey { background-color: #FAFAFA; }
+        .border-ucl-grey { border-color: #E0E0E0; }
+        
+        /* DEV NOTE: UCL Dark Purple integrated as the primary accent colour */
+        .bg-ucl-purple { background-color: #361a54; }
+        .text-ucl-purple { color: #361a54; }
+        .border-ucl-purple { border-color: #361a54; }
+        
+        /* DEV NOTE: Print-specific styles to ensure the dashboard exports cleanly to PDF */
+        @media print {
+            .print-hidden { display: none !important; }
+            body { background-color: white !important; }
+            .print-border { border: 1px solid #E0E0E0 !important; }
+        }
+
+        /* DEV NOTE: Enforcing the strict branding rule where ONLY the main title is bold */
+        h2, h3, h4, th, .font-bold, .font-semibold, b, strong {
+            font-weight: 400 !important;
+        }
+        .main-title {
+            font-weight: 700 !important;
+        }
+
+        /* Utility class to vertically align Lucide icons with text */
+        .lucide-icon {
+            display: inline-flex;
+            align-items: center;
+            vertical-align: middle;
+        }
+        
+        /* DEV NOTE: Overlay styling for popup messages (e.g. success/error notifications) */
+        .custom-modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <!-- DEV NOTE: This is the mount point where React will render our application -->
+    <div id="root"></div>
+
+    <!-- DEV NOTE: The main application logic is written in React (JSX) and compiled by Babel -->
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+
+        // DEV NOTE: Reusable Icon component. Since we are using the standalone Lucide script,
+        // this component safely creates an empty placeholder that Lucide replaces on render.
+        const Icon = ({ name, size = 18, className = "" }) => {
+            const kebab = (s) => s.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+            return (
+                <span className={`lucide-icon ${className}`}>
+                    <i data-lucide={kebab(name)} style={{ width: size, height: size }}></i>
+                </span>
+            );
+        };
+
+        const App = () => {
+            // ==========================================
+            // DEV NOTE: APPLICATION STATE MANAGEMENT
+            // ==========================================
+            
+            // Controls whether we group by "Theme" or "Category"
+            const [navMode, setNavMode] = useState('theme'); 
+            // Tracks which specific tab/page is currently active
+            const [activeTab, setActiveTab] = useState('overview');
+            // Stores the current text in the search input
+            const [searchTerm, setSearchTerm] = useState('');
+            const [selectedLead, setSelectedLead] = useState('All');
+            // Toggles the visibility of the data management/upload panel
+            const [isUploadOpen, setIsUploadOpen] = useState(false);
+            const [isSaving, setIsSaving] = useState(false);
+            // Stores notification messages to display to the user
+            const [message, setMessage] = useState(null);
+            
+            // State for the external CSV URL inputs
+            // DEV NOTE: Using the exact "Published to the web" string format provided by the user
+            const [planUrl, setPlanUrl] = useState('https://docs.google.com/spreadsheets/d/e/2PACX-1vS4Tp7QQdlX7JzZQ3T58GfBkXpxMLm4Q3gaU_ESclolqQDAb4DQ5kkcSjIYqXuYMCgZ40KznhQjCk4z/pub?output=csv');
+            const [impactUrl, setImpactUrl] = useState('');
+            const [isLoading, setIsLoading] = useState(true);
+
+            // Core data arrays for the dashboard content
+            const [projects, setProjects] = useState([]);
+            const [impactStories, setImpactStories] = useState([]);
+
+            // ==========================================
+            // DEV NOTE: DEFAULT DATA (FALLBACK)
+            // ==========================================
+            // This ensures the dashboard always has data to display, even if offline storage is cleared.
+            const defaultProjects = [
+                { "id": 1, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "Fair and Transparent promotions", "lead": "SW", "contributors": "HS, TJ, DS, GB", "rag": "A", "milestone": "Recommendations from pilot and proposal for roll out" },
+                { "id": 2, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "Wellcome Int 1", "lead": "LD", "contributors": "HS, TJ", "rag": "G", "milestone": "Evaluation, data analysis, report write up" },
+                { "id": 3, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "Wellcome Int 2", "lead": "LD", "contributors": "HS, TJ", "rag": "A", "milestone": "Launch careers framework and campaign" },
+                { "id": 4, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "Wellcome Int 3", "lead": "LD", "contributors": "HS, TJ", "rag": "G", "milestone": "Uni of Bristol workshop" },
+                { "id": 5, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "UKRN 1 (Train the Trainer)", "lead": "BJ", "contributors": "n/a", "rag": "G", "milestone": "Data and feedback report" },
+                { "id": 6, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "UKRN 2 (Reward and Recognition)", "lead": "BJ", "contributors": "n/a", "rag": "G", "milestone": "Project Report" },
+                { "id": 7, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "Employer of Choice for ECRs", "lead": "SW", "contributors": "GB, ET", "rag": "A", "milestone": "Monthly review meeting" },
+                { "id": 8, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "Impact of Coaching", "lead": "SW", "contributors": "n/a", "rag": "G", "milestone": "Final evaluation report" },
+                { "id": 9, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "WHEN Career Accelerator", "lead": "LD", "contributors": "TJ", "rag": "G", "milestone": "Impact report" },
+                { "id": 10, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "Staff scientist pathway", "lead": "LD", "contributors": "n/a", "rag": "A", "milestone": "Strategic review" },
+                { "id": 11, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "Researcher hub", "lead": "HS", "contributors": "n/a", "rag": "G", "milestone": "Focus groups" },
+                { "id": 12, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "RC team delivery", "name": "Bridging funding", "lead": "LD", "contributors": "n/a", "rag": "A", "milestone": "HR planning" },
+                { "id": 13, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "Partner delivery", "name": "VP office activities", "lead": "GB", "contributors": "Various SI", "rag": "R", "milestone": "Support Success input" },
+                { "id": 14, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "Funding schemes", "name": "Cross-UCL (VP offices)", "lead": "GB", "contributors": "SA", "rag": "A", "milestone": "Reporting" },
+                { "id": 15, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "Funding schemes", "name": "Faculty Funding", "lead": "SW", "contributors": "SA", "rag": "G", "milestone": "Reporting" },
+                { "id": 16, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "Funding schemes", "name": "Seed funding", "lead": "SW", "contributors": "AS, SA, DS", "rag": "G", "milestone": "Reporting" },
+                { "id": 17, "theme": "delivery", "themeLabel": "1. Delivery of programmes and projects", "cat": "Funding schemes", "name": "Scheme review", "lead": "SW", "contributors": "LD", "rag": "G", "milestone": "Final review" },
+                { "id": 18, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "Internal comms", "name": "Internal campaign", "lead": "TJ", "contributors": "DS, MA", "rag": "A", "milestone": "Evaluation" },
+                { "id": 19, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "Internal comms", "name": "Champions network", "lead": "MA", "contributors": "TJ", "rag": "G", "milestone": "Engagement" },
+                { "id": 20, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "Internal comms", "name": "Events/Showcase", "lead": "DS", "contributors": "SA, MA", "rag": "G", "milestone": "Showcase scoping" },
+                { "id": 21, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "Internal comms", "name": "Sponsor deck", "lead": "DS", "contributors": "MA, GB", "rag": "G", "milestone": "Implementation" },
+                { "id": 22, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "Internal comms", "name": "Evaluate comms performance", "lead": "DS", "contributors": "TJ", "rag": "G", "milestone": "Data analysis" },
+                { "id": 23, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "Internal comms", "name": "Launch content planner", "lead": "TJ", "contributors": "DS", "rag": "G", "milestone": "Team roll out" },
+                { "id": 24, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "Internal comms", "name": "SharePoint", "lead": "DS", "contributors": "TJ", "rag": "G", "milestone": "Updates" },
+                { "id": 25, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "RC toolkit", "name": "REF PCE guidance", "lead": "TBD", "contributors": "ET, MA", "rag": "R", "milestone": "Drafting" },
+                { "id": 26, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "RC toolkit", "name": "Grant-writing guidance", "lead": "TBD", "contributors": "n/a", "rag": "A", "milestone": "Workshops" },
+                { "id": 27, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "RC toolkit", "name": "Local dashboards", "lead": "MA", "contributors": "ET", "rag": "G", "milestone": "Implementation" },
+                { "id": 28, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "RC toolkit", "name": "RC CSG Resources", "lead": "MA", "contributors": "AS, HS", "rag": "G", "milestone": "Final resources" },
+                { "id": 29, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "RC toolkit", "name": "Branded Templates", "lead": "TBD", "contributors": "TJ, DS", "rag": "G", "milestone": "Roll out" },
+                { "id": 30, "theme": "comms", "themeLabel": "2. Amplifying change", "cat": "RC toolkit", "name": "Logic Model", "lead": "TBD", "contributors": "MA", "rag": "G", "milestone": "Final version" },
+                { "id": 31, "theme": "toolkit", "themeLabel": "3. Knowledge exchange", "cat": "External engagement", "name": "Engagement plan", "lead": "ET", "contributors": "TJ, GB", "rag": "A", "milestone": "Outreach" },
+                { "id": 32, "theme": "toolkit", "themeLabel": "3. Knowledge exchange", "cat": "External engagement", "name": "Conferences", "lead": "TJ", "contributors": "All", "rag": "G", "milestone": "Presentations" },
+                { "id": 33, "theme": "toolkit", "themeLabel": "3. Knowledge exchange", "cat": "External engagement", "name": "RC blog", "lead": "DS", "contributors": "ET, MA", "rag": "G", "milestone": "Publication" },
+                { "id": 34, "theme": "toolkit", "themeLabel": "3. Knowledge exchange", "cat": "External engagement", "name": "Website", "lead": "TJ", "contributors": "DS", "rag": "A", "milestone": "Architecture update" },
+                { "id": 35, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Governance", "name": "Policy identification", "lead": "GB", "contributors": "MA", "rag": "G", "milestone": "Proposals" },
+                { "id": 36, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Governance", "name": "Funding access", "lead": "GB", "contributors": "n/a", "rag": "G", "milestone": "REPAIR focus" },
+                { "id": 37, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Governance", "name": "Leadership dialogue", "lead": "TBD", "contributors": "TJ", "rag": "G", "milestone": "Proposal" },
+                { "id": 38, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Governance", "name": "Committee meetings", "lead": "ET", "contributors": "RCLT", "rag": "G", "milestone": "RIGE-C" },
+                { "id": 39, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Governance", "name": "PB meetings", "lead": "NC", "contributors": "ET", "rag": "G", "milestone": "Quarterly session" },
+                { "id": 40, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Governance", "name": "CSG meetings", "lead": "NC/MA", "contributors": "HS", "rag": "G", "milestone": "Notes" },
+                { "id": 41, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Governance", "name": "CSG review", "lead": "MA", "contributors": "ET", "rag": "G", "milestone": "Evaluation" },
+                { "id": 42, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Finance", "name": "Deadlines", "lead": "ET", "contributors": "HS", "rag": "G", "milestone": "Reporting" },
+                { "id": 43, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Planning", "name": "3yr plan", "lead": "ET", "contributors": "all", "rag": "G", "milestone": "Endorsement" },
+                { "id": 44, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Planning", "name": "Delivery plan", "lead": "HS", "contributors": "n/a", "rag": "G", "milestone": "Updates" },
+                { "id": 45, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Planning", "name": "UCL reporting", "lead": "TBC", "contributors": "All", "rag": "G", "milestone": "Mid-point" },
+                { "id": 46, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Planning", "name": "Concordat report", "lead": "ET", "contributors": "GB", "rag": "A", "milestone": "Drafting" },
+                { "id": 47, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Data", "name": "KPI dashboards", "lead": "HS", "contributors": "MA", "rag": "A", "milestone": "Iteration 3" },
+                { "id": 48, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Data", "name": "Theories of change", "lead": "P&O", "contributors": "HS", "rag": "R", "milestone": "Review" },
+                { "id": 49, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "Data", "name": "CEDARS survey", "lead": "HS", "contributors": "TJ", "rag": "A", "milestone": "Roll out" },
+                { "id": 50, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "People", "name": "Appraisals", "lead": "ET, GB, HS", "contributors": "All", "rag": "G", "milestone": "Window opens" },
+                { "id": 51, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "People", "name": "Team development", "lead": "HS", "contributors": "RCLT", "rag": "G", "milestone": "Workshop" },
+                { "id": 52, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "People", "name": "SOPs", "lead": "NC", "contributors": "SA", "rag": "G", "milestone": "Final version" },
+                { "id": 53, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "People", "name": "Team socials", "lead": "SA", "contributors": "Various", "rag": "G", "milestone": "Social planning" }
+            ];
+
+            const initialImpact = [
+                { title: "FES Promotions Project Impact", what: "The promotions project pilot in FES received 46 applications representing 14% of research staff, a substantial increase from previous years.", why: "Demonstrates institutional shift in fair and transparent promotion engagement.", who: "SW, Eva Sorenson, HS" },
+                { title: "Mentoring Scheme Programme Launch", what: "Research Support CoP and Impact CoP combined forces to launch a unified mentoring programme after consultation with OD.", why: "Reduces duplication and increases impact through a larger, collaborative staff cohort.", who: "LD and HS" },
+                { title: "Decision Maker Training Success", what: "Training for promotion application review panels received positive feedback for being relevant, interesting and enjoyable.", why: "Successfully engaging critical senior stakeholders diplomatically is a significant deliverable win.", who: "HS" },
+                { title: "Career Progression Success Story", what: "A research professional interviewed for Wellcome Int 2 successfully secured a place on the Level 7 Leadership apprenticeship.", why: "Demonstrates the real-world impact of talent management and institutional knowledge retention.", who: "LD, HS and CBC team" },
+                { title: "RCCA and WHEN Celebration", what: "A celebration event brought together 5 cohorts of ECRs and technical staff who completed their career accelerator programmes.", why: "Supports career parity and confidence for female academic and technical staff.", who: "Isabel Goncalves Cattuzzo" }
+            ];
+
+            // ==========================================
+            // DEV NOTE: DYNAMIC FILTERING LOGIC
+            // ==========================================
+            const allLeads = useMemo(() => {
+                const leads = new Set();
+                projects.forEach(p => {
+                    if (p.lead) {
+                        p.lead.split(',').forEach(l => leads.add(l.trim()));
+                    }
+                });
+                return ['All', ...Array.from(leads).sort()];
+            }, [projects]);
+
+            // useMemo ensures we only recalculate the filtered list when the search term, active tab, raw data, or lead filter changes.
+            const filteredProjects = useMemo(() => {
+                return projects.filter(p => {
+                    const s = searchTerm.toLowerCase();
+                    // Match against project name, lead, or contributors
+                    const ms = p.name.toLowerCase().includes(s) || p.lead.toLowerCase().includes(s) || (p.contributors && p.contributors.toLowerCase().includes(s));
+                    // Match against the currently selected tab (Theme or Category)
+                    const mt = activeTab === 'overview' || activeTab === 'impact' || (navMode === 'theme' && p.theme === activeTab) || (navMode === 'category' && p.cat === activeTab);
+                    // Match against the selected lead
+                    const ml = selectedLead === 'All' || p.lead.includes(selectedLead);
+                    
+                    return ms && mt && ml;
+                });
+            }, [searchTerm, activeTab, navMode, selectedLead, projects]);
+
+            const filteredImpact = useMemo(() => {
+                return impactStories.filter(story => {
+                    if (selectedLead === 'All') return true;
+                    return story.who.includes(selectedLead);
+                });
+            }, [impactStories, selectedLead]);
+
+            // ==========================================
+            // DEV NOTE: PORTFOLIO HEALTH CALCULATION
+            // ==========================================
+            // Dynamically calculates the RAG status counts based on the CURRENTLY filtered projects.
+            const ragStats = useMemo(() => {
+                const total = filteredProjects.length || 1; // Prevent division by zero
+                const g = filteredProjects.filter(p => p.rag === 'G').length;
+                const a = filteredProjects.filter(p => p.rag === 'A').length;
+                const r = filteredProjects.filter(p => p.rag === 'R').length;
+                return { g, a, r, gp: (g/total)*100, ap: (a/total)*100, rp: (r/total)*100, total: filteredProjects.length };
+            }, [filteredProjects]);
+
+            // ==========================================
+            // DEV NOTE: DATA INITIALISATION (GOOGLE SHEETS + LOCAL STORAGE)
+            // ==========================================
+            // Fetch live plan directly from the linked Google Sheet
+            const fetchLivePlan = () => {
+                setIsLoading(true);
+                
+                Papa.parse(planUrl, {
+                    download: true,
+                    header: false,
+                    skipEmptyLines: true,
+                    complete: (res) => {
+                        // Check if Google redirected us to a login page (returns HTML)
+                        if (res.data && res.data.length > 0 && typeof res.data[0][0] === 'string' && res.data[0][0].toLowerCase().includes('<!doctype html>')) {
+                            console.error("Received HTML instead of CSV. Sheet requires login.");
+                            setMessage({ 
+                                text: "Sync blocked by UCL login screen. Ensure 'Require viewers to sign in with UCL account' is UNCHECKED in the Google Sheet Publish settings.", 
+                                type: "error" 
+                            });
+                            setIsLoading(false);
+                            return;
+                        }
+                        
+                        processPlan(res.data);
+                        setIsLoading(false);
+                    },
+                    error: (err) => {
+                        console.error("Google Sheets fetch failed:", err);
+                        setMessage({ 
+                            text: "Browser blocked the sync. This happens when opening directly from a folder (file:///). Ensure UCL sign-in is unchecked in publish settings, or use the Data Management upload.", 
+                            type: "error" 
+                        });
+                        setIsLoading(false);
+                    }
+                });
+            };
+
+            // On initial load, fetch the live plan from Google Sheets, and local data for impact stories.
+            useEffect(() => {
+                const initialiseDashboard = () => {
+                    setIsLoading(true);
+                    
+                    // 1. Load Impact Data & Fallback Plan Data from Local Storage
+                    try {
+                        const savedData = localStorage.getItem('ucl-dashboard-data');
+                        if (savedData) {
+                            const data = JSON.parse(savedData);
+                            setImpactStories(data.impactStories || initialImpact);
+                            // We temporarily set local projects as a fallback while the sheet loads
+                            if (data.projects) setProjects(data.projects);
+                        } else {
+                            setImpactStories(initialImpact);
+                            setProjects(defaultProjects);
+                        }
+                    } catch (err) {
+                        console.error("Local load failed", err);
+                        setImpactStories(initialImpact);
+                        setProjects(defaultProjects);
+                    }
+
+                    // 2. Fetch Live Plan Data from Google Sheets
+                    fetchLivePlan();
+                };
+                initialiseDashboard();
+            }, []);
+
+            // Function to save the current data state back into the browser's localStorage
+            const saveToLocal = () => {
+                setIsSaving(true);
+                try {
+                    localStorage.setItem('ucl-dashboard-data', JSON.stringify({ projects, impactStories }));
+                    setMessage({ text: "Portfolio saved to your local offline storage.", type: "success" });
+                } catch (e) {
+                    setMessage({ text: "Error saving. Check browser local storage permissions.", type: "error" });
+                } finally { setIsSaving(false); }
+            };
+
+            // Triggers the initialisation of Lucide icons after every render
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); });
+
+            // Define the static Themes (Column A in the original spreadsheet)
+            const themes = [
+                { id: 'delivery', label: 'Programme Delivery', icon: 'CheckCircle2' },
+                { id: 'comms', label: 'Comms & Engagement', icon: 'MessageSquare' },
+                { id: 'toolkit', label: 'RC Toolkit', icon: 'BookOpen' },
+                { id: 'ops', label: 'Governance & Ops', icon: 'Settings' },
+            ];
+
+            // Define Categories dynamically based on the current projects data
+            const categories = useMemo(() => {
+                const uniqueCats = [...new Set(projects.map(p => p.cat))];
+                const catIcons = { 'RC team delivery': 'Users', 'Partner delivery': 'Target', 'Governance': 'Settings', 'Finance': 'TrendingUp', 'Planning and reporting': 'LayoutDashboard', 'Data and insights': 'Search', 'People development': 'UserPlus' };
+                return uniqueCats.map(cat => ({ id: cat, label: cat, icon: catIcons[cat] || 'Layers' }));
+            }, [projects]);
+
+            // ==========================================
+            // DEV NOTE: DATA PARSERS
+            // ==========================================
+            // Parses the Delivery Plan CSV
+            const processPlan = (data) => {
+                const newProjects = [];
+                let cT = "", cTL = "", cC = "";
+                // Locate the header row to know where the data starts
+                const hIdx = data.findIndex(r => r.includes('#') || r.includes('Sub-category'));
+                if (hIdx === -1) return;
+                
+                data.slice(hIdx + 1).forEach(r => {
+                    // Carry down Theme logic if the cell is populated
+                    if (r[0]?.trim()) {
+                        cTL = r[0].trim();
+                        cT = cTL.includes('1.') ? 'delivery' : cTL.includes('2.') ? 'comms' : cTL.includes('3.') ? 'toolkit' : 'ops';
+                    }
+                    // Carry down Category logic
+                    if (r[1]?.trim()) cC = r[1].trim();
+                    
+                    const id = parseInt(r[2]);
+                    if (id && r[3]) {
+                        // Extract RAG status, defaulting to G if missing or malformed
+                        let rag = ((r[10] || r[9] || 'G').trim().charAt(0).toUpperCase());
+                        if (!['G','A','R'].includes(rag)) rag = 'G';
+                        
+                        newProjects.push({ id, theme: cT, themeLabel: cTL, cat: cC, name: r[3].trim(), lead: r[5] || 'TBC', contributors: r[6] || 'n/a', rag, milestone: r[20] || "Update register" });
+                    }
+                });
+                if (newProjects.length > 0) setProjects(newProjects);
+            };
+
+            // Parses the Impact Register CSV
+            const processImpact = (data) => {
+                const newImpact = [];
+                const hIdx = data.findIndex(r => r.includes('What happened?'));
+                if (hIdx === -1) return;
+                
+                // Filter out empty rows or meta rows like "Ta da list", keeping only the latest 5
+                data.slice(hIdx + 1).filter(r => r[3]?.trim() && r[3].toLowerCase() !== 'ta da list').slice(-5).forEach(r => {
+                    const what = r[3].replace(/\n/g, ' ').trim();
+                    newImpact.push({ title: what.split(' ').slice(0, 5).join(' ') + "...", what, why: r[4] || "Logged.", who: r[5] || "Team" });
+                });
+                if (newImpact.length > 0) setImpactStories(newImpact);
+            };
+
+            // Handles the physical file upload via the input field
+            const handleFileUpload = (e, type) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                Papa.parse(file, { header: false, skipEmptyLines: true, complete: (res) => {
+                    if (type === 'plan') processPlan(res.data);
+                    else processImpact(res.data);
+                }});
+            };
+
+            // Handles fetching a CSV from a public URL (e.g., raw github link)
+            const handleUrlFetch = (url, type) => {
+                if (!url) return;
+                setIsLoading(true);
+                Papa.parse(url, { download: true, header: false, skipEmptyLines: true,
+                    complete: (res) => {
+                        if (type === 'plan') processPlan(res.data);
+                        else processImpact(res.data);
+                        setIsLoading(false);
+                    },
+                    error: () => { setMessage({ text: "Failed to fetch. Ensure URL is a public CSV.", type: "error" }); setIsLoading(false); }
+                });
+            };
+
+            // Calculate the maximum items in any category to correctly scale the progress bars in the Portfolio Mix view
+            const maxCategoryCount = useMemo(() => {
+                const navItems = navMode === 'theme' ? themes : categories;
+                const counts = navItems.map(item => filteredProjects.filter(p => (navMode === 'theme' ? p.theme === item.id : p.cat === item.id)).length);
+                return Math.max(...counts, 1);
+            }, [filteredProjects, navMode, themes, categories]);
+            
+            // Helper for the RAG badges
+            const getStatusBadge = (rag) => {
+                switch(rag) {
+                    case 'G': return <span className="inline-block px-3 py-1 border border-[#007D32] text-[#007D32] bg-[#F1FFF1] text-[10px] uppercase tracking-widest text-center min-w-[80px]">On Track</span>;
+                    case 'A': return <span className="inline-block px-3 py-1 border border-[#D97700] text-[#D97700] bg-[#FFF8F0] text-[10px] uppercase tracking-widest text-center min-w-[80px]">Needs Attention</span>;
+                    case 'R': return <span className="inline-block px-3 py-1 border border-[#E03C31] text-[#E03C31] bg-[#FFF0F0] text-[10px] uppercase tracking-widest text-center min-w-[80px]">At Risk</span>;
+                    default: return <span className="inline-block px-3 py-1 border border-[#757575] text-[#757575] bg-[#F6F6F6] text-[10px] uppercase tracking-widest text-center min-w-[80px]">Unknown</span>;
+                }
+            };
+
+            return (
+                <div className="min-h-screen pb-20 flex flex-col bg-white">
+                    {/* DEV NOTE: Success/Error Notification Modal */}
+                    {message && (
+                        <div className="custom-modal-overlay print-hidden" onClick={() => setMessage(null)}>
+                            <div className="bg-white p-10 border border-black max-w-sm text-center space-y-6" onClick={e => e.stopPropagation()}>
+                                <Icon name={message.type === 'success' ? "CheckCircle" : "AlertCircle"} size={48} className={message.type === 'success' ? "text-[#007D32]" : "text-[#E03C31]"} />
+                                <p className="text-sm font-normal">{message.text}</p>
+                                <button onClick={() => setMessage(null)} className="w-full py-3 bg-ucl-purple text-white text-xs uppercase tracking-widest font-normal hover:bg-black transition-colors">Dismiss</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* DEV NOTE: Top Application Header & Branding */}
+                    <header className="bg-[#FCF9FC] sticky top-0 z-30 print-hidden">
+                        <div className="max-w-7xl mx-auto px-6 py-8 flex flex-col md:flex-row md:items-end justify-between gap-6">
+                            <div className="space-y-6">
+                                {/* DEV NOTE: UCL Logo updated to use the provided online horizontal logo */}
+                                <img 
+                                    src="https://cdn.ucl.ac.uk/logos/ucl/ucl-logo--primary.svg" 
+                                    alt="UCL Logo" 
+                                    className="h-12 w-auto object-contain border-none"
+                                    onError={(e) => { e.target.onerror = null; e.target.src = 'https://www.ucl.ac.uk/profiles/custom/ucl_profile/images/ucl-logo.svg'; }}
+                                />
+                                <h1 className="text-4xl main-title tracking-tight text-black">Research Culture Delivery Dashboard</h1>
+                            </div>
+                            <div className="flex items-center gap-4">
+                                <div className="flex border border-black p-1">
+                                    <button onClick={() => { setNavMode('theme'); setActiveTab('overview'); }}
+                                        className={`px-4 py-2 text-xs uppercase tracking-widest transition-all ${navMode === 'theme' ? 'bg-ucl-purple text-white' : 'text-black hover:bg-gray-100'}`}>
+                                        Themes
+                                    </button>
+                                    <button onClick={() => { setNavMode('category'); setActiveTab('overview'); }}
+                                        className={`px-4 py-2 text-xs uppercase tracking-widest transition-all ${navMode === 'category' ? 'bg-ucl-purple text-white' : 'text-black hover:bg-gray-100'}`}>
+                                        Categories
+                                    </button>
+                                </div>
+                                <button onClick={fetchLivePlan} disabled={isLoading} className="p-2 border border-black hover:bg-gray-100 transition-all disabled:opacity-50" title="Refresh Live Data">
+                                    <Icon name={isLoading ? "Loader2" : "RefreshCw"} size={20} className={isLoading ? "animate-spin text-ucl-purple" : ""} />
+                                </button>
+                                <button onClick={() => setIsUploadOpen(!isUploadOpen)} className={`p-2 border border-black transition-all ${isUploadOpen ? 'bg-ucl-purple text-white border-ucl-purple' : 'hover:bg-gray-100'}`} title="Data Management"><Icon name="Database" size={20} /></button>
+                                <button onClick={() => window.print()} className="p-2 border border-black hover:bg-gray-100 transition-all" title="Print to PDF"><Icon name="Printer" size={20} /></button>
+                            </div>
+                        </div>
+
+                        {/* DEV NOTE: Collapsible Data Management / Upload Panel */}
+                        {isUploadOpen && (
+                            <div className="bg-ucl-grey border-t border-gray-300 p-8">
+                                <div className="max-w-6xl mx-auto space-y-10">
+                                    <div className="flex items-center justify-between border-b border-gray-300 pb-4">
+                                        <h3 className="text-sm uppercase tracking-[0.2em] font-normal">Data Management</h3>
+                                        <button onClick={saveToLocal} disabled={isSaving} className="bg-ucl-purple text-white px-8 py-2.5 text-[10px] uppercase tracking-[0.2em] font-normal hover:bg-black transition-colors">
+                                            {isSaving ? "Saving..." : "Save Portfolio Offline"}
+                                        </button>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-12 text-black">
+                                        <div className="space-y-4">
+                                            <p className="text-[10px] uppercase tracking-widest text-gray-500 font-normal">Delivery Plan Source (CSV)</p>
+                                            <input type="file" accept=".csv" onChange={(e) => handleFileUpload(e, 'plan')} className="block w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:border file:border-black file:bg-white file:text-black file:cursor-pointer hover:file:bg-black hover:file:text-white" />
+                                        </div>
+                                        <div className="space-y-4">
+                                            <p className="text-[10px] uppercase tracking-widest text-gray-500 font-normal">Impact Register Source (CSV)</p>
+                                            <input type="file" accept=".csv" onChange={(e) => handleFileUpload(e, 'impact')} className="block w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:border file:border-black file:bg-white file:text-black file:cursor-pointer hover:file:bg-black hover:file:text-white" />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </header>
+
+                    <main className="max-w-7xl mx-auto px-6 py-12 flex-1 w-full bg-white">
+                        {/* DEV NOTE: Main Navigation Tabs */}
+                        <div className="flex overflow-x-auto mb-12 border-b border-gray-300 uppercase tracking-widest text-xs font-normal print-hidden">
+                            <button onClick={() => setActiveTab('overview')}
+                                className={`px-6 py-4 border-b-4 transition-all ${activeTab === 'overview' ? 'border-ucl-purple text-ucl-purple' : 'border-transparent text-gray-600 hover:text-black'}`}>
+                                Overview
+                            </button>
+                            {(navMode === 'theme' ? themes : categories).map(item => (
+                                <button key={item.id} onClick={() => setActiveTab(item.id)}
+                                    className={`px-6 py-4 border-b-4 transition-all ${activeTab === item.id ? 'border-ucl-purple text-ucl-purple' : 'border-transparent text-gray-600 hover:text-black'}`}>
+                                    {item.label}
+                                </button>
+                            ))}
+                            {/* DEV NOTE: Only show the Impact tab when in "theme" navigation mode */}
+                            {navMode === 'theme' && (
+                                <button onClick={() => setActiveTab('impact')}
+                                    className={`px-6 py-4 border-b-4 transition-all ml-auto ${activeTab === 'impact' ? 'border-ucl-pink text-ucl-pink' : 'border-transparent text-gray-600 hover:text-black'}`}>
+                                    Impact & Success Stories
+                                </button>
+                            )}
+                        </div>
+
+                        {/* DEV NOTE: Global Search & Lead Filter */}
+                        <div className="flex flex-col md:flex-row justify-end gap-4 mb-8 print-hidden">
+                            <div className="relative w-full md:w-80">
+                                <Icon name="Search" className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={18} />
+                                <input type="text" placeholder="Search workstreams..." className="pl-12 p-3 w-full border border-black text-sm font-normal outline-none focus:border-ucl-purple" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                            </div>
+                            <div className="relative w-full md:w-64">
+                                <select 
+                                    className="appearance-none p-3 pl-4 pr-10 w-full border border-black text-sm font-normal outline-none focus:border-ucl-purple bg-white cursor-pointer"
+                                    value={selectedLead}
+                                    onChange={(e) => setSelectedLead(e.target.value)}
+                                >
+                                    {allLeads.map(lead => <option key={lead} value={lead}>{lead === 'All' ? 'All Leads' : `Lead: ${lead}`}</option>)}
+                                </select>
+                                <Icon name="ChevronDown" className="absolute right-4 top-1/2 -translate-y-1/2 text-black pointer-events-none" size={16} />
+                            </div>
+                        </div>
+
+                        {/* DEV NOTE: Conditional Rendering based on selected Tab */}
+                        {activeTab === 'overview' ? (
+                            <div className="space-y-16 animate-in fade-in duration-300">
+                                {isLoading ? (
+                                    <div className="py-20 text-center text-gray-500 space-y-4">
+                                        <Icon name="Loader2" size={32} className="animate-spin mx-auto opacity-50" />
+                                        <p className="text-[10px] uppercase tracking-widest font-normal">Loading Portfolio...</p>
+                                    </div>
+                                ) : (
+                                    <>
+                                        {/* DEV NOTE: High-level KPI Section */}
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-0 border border-gray-300">
+                                            <div className="p-10 border-b md:border-b-0 md:border-r border-gray-300">
+                                                <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Current Health</p>
+                                                <p className="text-6xl text-ucl-purple tracking-tighter">{ragStats.g} <span className="text-xs uppercase tracking-widest text-[#007D32] font-normal ml-2">On Track</span></p>
+                                            </div>
+                                            <div className="p-10 border-b md:border-b-0 lg:border-r border-gray-300">
+                                                <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Portfolio Scope</p>
+                                                <p className="text-6xl text-ucl-purple tracking-tighter">{ragStats.total}</p>
+                                            </div>
+                                            <div className="p-10 border-b md:border-b-0 md:border-r border-gray-300">
+                                                <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Reporting Cycle</p>
+                                                <p className="text-6xl text-ucl-purple tracking-tighter">JUN</p>
+                                            </div>
+                                            <div className="p-10 bg-ucl-grey">
+                                                <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Priority Committees</p>
+                                                <p className="text-2xl text-black leading-tight">PCC / RIGE-C</p>
+                                                <p className="text-[10px] uppercase tracking-widest text-ucl-pink mt-4 font-normal">Endorsement Required</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-20">
+                                            {/* DEV NOTE: Dynamic Bar Charts based on Theme/Category selection */}
+                                            <div>
+                                                <h3 className="text-2xl text-black mb-8 border-b border-black pb-4">Portfolio Analysis</h3>
+                                                <div className="space-y-8">
+                                                    {(navMode === 'theme' ? themes : categories).map(item => {
+                                                        const count = filteredProjects.filter(p => (navMode === 'theme' ? p.theme === item.id : p.cat === item.id)).length;
+                                                        const perc = (count / (filteredProjects.length || 1)) * 100;
+                                                        return (
+                                                            <div key={item.id} className="group cursor-pointer" onClick={() => setActiveTab(item.id)}>
+                                                                <div className="flex justify-between items-center mb-3">
+                                                                    <span className="text-sm text-black uppercase tracking-widest">{item.label}</span>
+                                                                    <span className="text-xs text-gray-400 font-normal">{count} Projects</span>
+                                                                </div>
+                                                                <div className="w-full bg-gray-100 h-1 overflow-hidden">
+                                                                    <div className="h-full bg-black group-hover:bg-ucl-purple transition-all duration-500" style={{ width: `${perc * 3}%` }}></div>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <h3 className="text-2xl text-black mb-8 border-b border-black pb-4">Governance Milestones</h3>
+                                                <div className="space-y-4">
+                                                    {[{ name: 'PCC', date: '20 APR', focus: 'Promotions Pilot' }, { name: 'RIGE-C', date: '21 APR', focus: 'UCL-wide Roll-out' }].map((gov, i) => (
+                                                        <div key={i} className="flex items-center p-6 border border-gray-300 hover:border-ucl-purple transition-colors">
+                                                            <div className="w-24 border-r border-gray-300 mr-6 text-sm text-ucl-purple font-normal">{gov.date}</div>
+                                                            <div className="flex-1">
+                                                                <p className="text-sm text-black font-normal">{gov.name}</p>
+                                                                <p className="text-[10px] text-gray-500 uppercase tracking-widest mt-1 font-normal">{gov.focus}</p>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        ) : activeTab === 'impact' ? (
+                            /* DEV NOTE: Impact & Success Tab Layout */
+                            <div className="space-y-12 animate-in fade-in duration-300">
+                                <h2 className="text-4xl text-black tracking-tight border-b border-black pb-6">Impact & Success Stories</h2>
+                                <div className="grid grid-cols-1 gap-12">
+                                    {filteredImpact.length === 0 ? (
+                                        <div className="py-20 text-center text-gray-400 text-xs uppercase tracking-widest font-normal border border-gray-300">No impact stories found for this lead</div>
+                                    ) : filteredImpact.map((story, idx) => (
+                                        <div key={idx} className="border border-gray-300 flex flex-col md:flex-row print:border">
+                                            <div className="md:w-72 bg-ucl-grey p-10 border-b md:border-b-0 md:border-r border-gray-300 flex flex-col justify-between">
+                                                <div>
+                                                    <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Lead / Contributors</p>
+                                                    <p className="text-sm text-black leading-relaxed font-normal">{story.who}</p>
+                                                </div>
+                                                <p className="text-5xl text-gray-200 mt-12 font-normal">0{idx + 1}</p>
+                                            </div>
+                                            <div className="flex-1 p-10 lg:p-14">
+                                                <h3 className="text-2xl text-black mb-10 pb-4 border-b border-gray-100">{story.title}</h3>
+                                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-16">
+                                                    <div>
+                                                        <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Summary</p>
+                                                        <p className="text-black text-sm leading-relaxed font-normal">{story.what}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] uppercase tracking-widest text-ucl-pink mb-6 font-normal">Institutional Impact</p>
+                                                        <p className="text-black text-sm leading-relaxed italic font-normal">{story.why}</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : (
+                            /* DEV NOTE: Detail view for specific Themes or Categories */
+                            <div className="space-y-8 animate-in fade-in duration-300">
+                                <div className="flex flex-col md:flex-row justify-between items-center gap-8 mb-10 pb-6 border-b border-gray-300">
+                                    <h2 className="text-3xl text-black tracking-tight">
+                                        {navMode === 'theme' ? themes.find(t => t.id === activeTab)?.label : categories.find(c => c.id === activeTab)?.label}
+                                    </h2>
+                                </div>
+                                <div className="border border-gray-300 overflow-hidden">
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-left border-collapse">
+                                            <thead className="bg-ucl-grey border-b border-gray-300">
+                                                <tr>
+                                                    <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 w-32 font-normal">Status</th>
+                                                    <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 min-w-[280px] font-normal">Project Title</th>
+                                                    <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 font-normal">KPI</th>
+                                                    <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 text-center font-normal">Lead</th>
+                                                    <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 text-center font-normal">Contributors</th>
+                                                    <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 font-normal">Upcoming Activity</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-200">
+                                                {filteredProjects.length === 0 ? (
+                                                    <tr><td colSpan="6" className="px-6 py-20 text-center text-gray-400 text-xs uppercase tracking-widest font-normal">No matches found in portfolio</td></tr>
+                                                ) : filteredProjects.map(p => (
+                                                    <tr key={p.id} className="hover:bg-gray-50 transition-colors">
+                                                        <td className="px-6 py-6">
+                                                            {/* DEV NOTE: Using accessible RAG badge function */}
+                                                            {p.rag === 'G' ? <span className="inline-block px-3 py-1 border border-[#007D32] text-[#007D32] bg-[#F1FFF1] text-[10px] uppercase tracking-widest text-center min-w-[80px]">On Track</span> :
+                                                             p.rag === 'A' ? <span className="inline-block px-3 py-1 border border-[#D97700] text-[#D97700] bg-[#FFF8F0] text-[10px] uppercase tracking-widest text-center min-w-[80px]">Needs Attention</span> :
+                                                             <span className="inline-block px-3 py-1 border border-[#E03C31] text-[#E03C31] bg-[#FFF0F0] text-[10px] uppercase tracking-widest text-center min-w-[80px]">At Risk</span>}
+                                                        </td>
+                                                        <td className="px-6 py-6 text-sm text-black font-normal">{p.name}</td>
+                                                        <td className="px-6 py-6 text-[10px] text-gray-400 uppercase tracking-widest font-normal">ID #{p.id}</td>
+                                                        <td className="px-6 py-6 text-center">
+                                                            <span className="inline-block px-4 py-1.5 bg-ucl-grey border border-gray-300 text-black text-[10px] uppercase tracking-widest font-normal">
+                                                                {p.lead}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-6 text-center text-xs text-gray-600 font-normal">
+                                                            {p.contributors}
+                                                        </td>
+                                                        <td className="px-6 py-6 text-xs text-gray-600 leading-relaxed font-normal">{p.milestone}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* DEV NOTE: Standard Page Footer */}
+                    <footer className="mt-20 border-t border-gray-300 bg-white py-16 print-hidden">
+                        <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-8 opacity-40">
+                            <p className="text-[10px] uppercase tracking-[0.3em] font-normal text-black">© 2025-26 UCL Research Culture Team</p>
+                            <div className="flex gap-12 text-[10px] uppercase tracking-[0.3em] font-normal text-black">
+                                <span className="flex items-center gap-2"><Icon name="Info" size={12} /> Registry</span>
+                                <span className="flex items-center gap-2"><Icon name="TrendingUp" size={12} /> Budget: 579332</span>
+                            </div>
+                        </div>
+                    </footer>
+                </div>
+            );
+        };
+
+        // Render the application into the DOM
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
