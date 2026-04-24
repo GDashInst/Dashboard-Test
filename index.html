@@ -191,6 +191,7 @@
                 { "id": 53, "theme": "ops", "themeLabel": "4. Enabling activity", "cat": "People", "name": "Team socials", "lead": "SA", "contributors": "Various", "rag": "G", "milestone": "Social planning" }
             ].map(p => ({
                 ...p,
+                team: "RC Core",
                 activities: [
                     { date: 'Project Scoped', desc: 'Initial phase mapping complete and lead assigned.' },
                     { date: 'Upcoming', desc: p.milestone }
@@ -210,9 +211,15 @@
             // ==========================================
             const allLeads = useMemo(() => {
                 const leads = new Set();
+                const excludedLeads = ['?', 'TBD', 'TBC', 'NC/MA']; // Ensure unknown/pending placeholders are excluded
                 projects.forEach(p => {
                     if (p.lead) {
-                        p.lead.split(',').forEach(l => leads.add(l.trim()));
+                        p.lead.split(',').forEach(l => {
+                            const trimmedLead = l.trim();
+                            if (trimmedLead !== '' && !excludedLeads.includes(trimmedLead)) {
+                                leads.add(trimmedLead);
+                            }
+                        });
                     }
                 });
                 return ['All', ...Array.from(leads).sort()];
@@ -223,9 +230,9 @@
                 return projects.filter(p => {
                     const s = searchTerm.toLowerCase();
                     // Match against project name, lead, or contributors
-                    const ms = p.name.toLowerCase().includes(s) || p.lead.toLowerCase().includes(s) || (p.contributors && p.contributors.toLowerCase().includes(s));
-                    // Match against the currently selected tab (Theme or Category)
-                    const mt = activeTab === 'overview' || activeTab === 'impact' || (navMode === 'theme' && p.theme === activeTab) || (navMode === 'category' && p.cat === activeTab);
+                    const ms = p.name.toLowerCase().includes(s) || p.lead.toLowerCase().includes(s) || (p.contributors && p.contributors.toLowerCase().includes(s)) || (p.team && p.team.toLowerCase().includes(s));
+                    // Match against the currently selected tab (Theme, Category or Team)
+                    const mt = activeTab === 'overview' || activeTab === 'impact' || (navMode === 'theme' && p.theme === activeTab) || (navMode === 'category' && p.cat === activeTab) || (navMode === 'team' && p.team === activeTab);
                     // Match against the selected lead
                     const ml = selectedLead === 'All' || p.lead.includes(selectedLead);
                     
@@ -347,6 +354,19 @@
                 return uniqueCats.map(cat => ({ id: cat, label: cat, icon: catIcons[cat] || 'Layers' }));
             }, [projects]);
 
+            // Define Teams dynamically based on the current projects data
+            const teamsList = useMemo(() => {
+                const uniqueTeams = [...new Set(projects.map(p => p.team).filter(Boolean))];
+                return uniqueTeams.map(team => ({ id: team, label: team, icon: 'Users' }));
+            }, [projects]);
+
+            // Helper to get active nav items based on current view
+            const getActiveNavItems = () => {
+                if (navMode === 'theme') return themes;
+                if (navMode === 'category') return categories;
+                return teamsList;
+            };
+
             // ==========================================
             // DEV NOTE: DATA PARSERS
             // ==========================================
@@ -358,6 +378,8 @@
                 const hIdx = data.findIndex(r => r.includes('#') || r.includes('Sub-category'));
                 if (hIdx === -1) return;
                 const headers = data[hIdx];
+                
+                const teamIdx = headers.findIndex(h => h && typeof h === 'string' && h.toLowerCase().trim() === 'team');
                 
                 data.slice(hIdx + 1).forEach(r => {
                     // Carry down Theme logic if the cell is populated
@@ -380,7 +402,7 @@
                             if(headers[i] && r[i] && r[i].trim() !== '') {
                                 const hLower = headers[i].toLowerCase();
                                 // Filter out columns that are clearly not timeline updates
-                                if(!['rag', 'status', 'budget', 'resource', 'notes'].some(k => hLower.includes(k))) {
+                                if(!['rag', 'status', 'budget', 'resource', 'notes', 'team'].some(k => hLower.includes(k))) {
                                     parsedActivities.push({
                                         date: headers[i].trim(),
                                         desc: r[i].trim()
@@ -400,6 +422,7 @@
                             theme: cT, 
                             themeLabel: cTL, 
                             cat: cC, 
+                            team: teamIdx !== -1 && r[teamIdx] ? r[teamIdx].trim() : 'Unassigned',
                             name: r[3].trim(), 
                             lead: r[5] || 'TBC', 
                             contributors: r[6] || 'n/a', 
@@ -452,10 +475,15 @@
 
             // Calculate the maximum items in any category to correctly scale the progress bars in the Portfolio Mix view
             const maxCategoryCount = useMemo(() => {
-                const navItems = navMode === 'theme' ? themes : categories;
-                const counts = navItems.map(item => filteredProjects.filter(p => (navMode === 'theme' ? p.theme === item.id : p.cat === item.id)).length);
+                const navItems = getActiveNavItems();
+                const counts = navItems.map(item => filteredProjects.filter(p => {
+                    if (navMode === 'theme') return p.theme === item.id;
+                    if (navMode === 'category') return p.cat === item.id;
+                    if (navMode === 'team') return p.team === item.id;
+                    return false;
+                }).length);
                 return Math.max(...counts, 1);
-            }, [filteredProjects, navMode, themes, categories]);
+            }, [filteredProjects, navMode, themes, categories, teamsList]);
             
             // Helper for the RAG badges
             const getStatusBadge = (rag) => {
@@ -503,6 +531,10 @@
                                         className={`px-4 py-2 text-xs uppercase tracking-widest transition-all ${navMode === 'category' ? 'bg-ucl-purple text-white' : 'text-black hover:bg-gray-100'}`}>
                                         Categories
                                     </button>
+                                    <button onClick={() => { setNavMode('team'); setActiveTab('overview'); }}
+                                        className={`px-4 py-2 text-xs uppercase tracking-widest transition-all ${navMode === 'team' ? 'bg-ucl-purple text-white' : 'text-black hover:bg-gray-100'}`}>
+                                        Teams
+                                    </button>
                                 </div>
                                 <button onClick={fetchLivePlan} disabled={isLoading} className="p-2 border border-black hover:bg-gray-100 transition-all disabled:opacity-50" title="Refresh Live Data">
                                     <Icon name={isLoading ? "Loader2" : "RefreshCw"} size={20} className={isLoading ? "animate-spin text-ucl-purple" : ""} />
@@ -544,7 +576,7 @@
                                 className={`px-6 py-4 border-b-4 transition-all ${activeTab === 'overview' ? 'border-ucl-purple text-ucl-purple' : 'border-transparent text-gray-600 hover:text-black'}`}>
                                 Overview
                             </button>
-                            {(navMode === 'theme' ? themes : categories).map(item => (
+                            {getActiveNavItems().map(item => (
                                 <button key={item.id} onClick={() => setActiveTab(item.id)}
                                     className={`px-6 py-4 border-b-4 transition-all ${activeTab === item.id ? 'border-ucl-purple text-ucl-purple' : 'border-transparent text-gray-600 hover:text-black'}`}>
                                     {item.label}
@@ -571,7 +603,7 @@
                                     value={selectedLead}
                                     onChange={(e) => setSelectedLead(e.target.value)}
                                 >
-                                    {allLeads.map(lead => <option key={lead} value={lead}>{lead === 'All' ? 'All Leads' : `Lead: ${lead}`}</option>)}
+                                    {allLeads.map(lead => <option key={lead} value={lead}>{lead === 'All' ? 'All Leads' : lead}</option>)}
                                 </select>
                                 <Icon name="ChevronDown" className="absolute right-4 top-1/2 -translate-y-1/2 text-black pointer-events-none" size={16} />
                             </div>
@@ -588,69 +620,146 @@
                                 ) : (
                                     <>
                                         {/* DEV NOTE: High-level KPI Section */}
-                                        <div className="space-y-4">
-                                            <div className="flex justify-end">
-                                                <p className="text-[10px] uppercase tracking-widest text-gray-500 font-normal">
-                                                    As of: {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
-                                                </p>
+                                        {navMode !== 'team' && (
+                                            <div className="space-y-4">
+                                                <div className="flex justify-end">
+                                                    <p className="text-[10px] uppercase tracking-widest text-gray-500 font-normal">
+                                                        As of: {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                                                    </p>
+                                                </div>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-0 border border-gray-300">
+                                                    <div className="p-10 border-b md:border-b-0 md:border-r border-gray-300">
+                                                        <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Current Health</p>
+                                                        <p className="text-6xl text-ucl-purple tracking-tighter">{ragStats.g} <span className="text-xs uppercase tracking-widest text-[#007D32] font-normal ml-2">On Track</span></p>
+                                                    </div>
+                                                    <div className="p-10 border-b md:border-b-0 lg:border-r border-gray-300">
+                                                        <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Portfolio Scope</p>
+                                                        <p className="text-6xl text-ucl-purple tracking-tighter">{ragStats.total}</p>
+                                                    </div>
+                                                    <div className="p-10 border-b md:border-b-0 md:border-r border-gray-300">
+                                                        <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Reporting Cycle</p>
+                                                        <p className="text-6xl text-ucl-purple tracking-tighter">JUN</p>
+                                                    </div>
+                                                    <div className="p-10 bg-ucl-grey">
+                                                        <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Priority Committees</p>
+                                                        <p className="text-2xl text-black leading-tight">PCC / RIGE-C</p>
+                                                        <p className="text-[10px] uppercase tracking-widest text-ucl-pink mt-4 font-normal">Endorsement Required</p>
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-0 border border-gray-300">
-                                                <div className="p-10 border-b md:border-b-0 md:border-r border-gray-300">
-                                                    <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Current Health</p>
-                                                    <p className="text-6xl text-ucl-purple tracking-tighter">{ragStats.g} <span className="text-xs uppercase tracking-widest text-[#007D32] font-normal ml-2">On Track</span></p>
-                                                </div>
-                                                <div className="p-10 border-b md:border-b-0 lg:border-r border-gray-300">
-                                                    <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Portfolio Scope</p>
-                                                    <p className="text-6xl text-ucl-purple tracking-tighter">{ragStats.total}</p>
-                                                </div>
-                                                <div className="p-10 border-b md:border-b-0 md:border-r border-gray-300">
-                                                    <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Reporting Cycle</p>
-                                                    <p className="text-6xl text-ucl-purple tracking-tighter">JUN</p>
-                                                </div>
-                                                <div className="p-10 bg-ucl-grey">
-                                                    <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-6 font-normal">Priority Committees</p>
-                                                    <p className="text-2xl text-black leading-tight">PCC / RIGE-C</p>
-                                                    <p className="text-[10px] uppercase tracking-widest text-ucl-pink mt-4 font-normal">Endorsement Required</p>
-                                                </div>
-                                            </div>
-                                        </div>
+                                        )}
 
-                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-20">
+                                        <div className={`grid grid-cols-1 ${navMode !== 'team' ? 'lg:grid-cols-2' : ''} gap-20`}>
                                             {/* DEV NOTE: Dynamic Bar Charts based on Theme/Category selection */}
                                             <div>
-                                                <h3 className="text-2xl text-black mb-8 border-b border-black pb-4">Portfolio Analysis</h3>
-                                                <div className="space-y-8">
-                                                    {(navMode === 'theme' ? themes : categories).map(item => {
-                                                        const count = filteredProjects.filter(p => (navMode === 'theme' ? p.theme === item.id : p.cat === item.id)).length;
-                                                        const perc = (count / (filteredProjects.length || 1)) * 100;
-                                                        return (
-                                                            <div key={item.id} className="group cursor-pointer" onClick={() => setActiveTab(item.id)}>
-                                                                <div className="flex justify-between items-center mb-3">
-                                                                    <span className="text-sm text-black uppercase tracking-widest">{item.label}</span>
-                                                                    <span className="text-xs text-gray-400 font-normal">{count} Projects</span>
+                                                {navMode !== 'team' && (
+                                                    <h3 className="text-2xl text-black mb-8 border-b border-black pb-4">Portfolio Analysis</h3>
+                                                )}
+                                                {navMode === 'team' ? (
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                                                        {getActiveNavItems().map(item => {
+                                                            const groupProjects = filteredProjects.filter(p => p.team === item.id);
+                                                            const count = groupProjects.length;
+                                                            const gCount = groupProjects.filter(p => p.rag === 'G').length;
+                                                            const aCount = groupProjects.filter(p => p.rag === 'A').length;
+                                                            const rCount = groupProjects.filter(p => p.rag === 'R').length;
+                                                            
+                                                            const total = count || 1;
+                                                            const gPerc = (gCount / total) * 100;
+                                                            const aPerc = (aCount / total) * 100;
+                                                            const rPerc = (rCount / total) * 100;
+
+                                                            return (
+                                                                <div key={item.id} className="border border-gray-300 p-5 flex flex-col items-center justify-between h-full cursor-pointer hover:border-ucl-purple transition-colors bg-ucl-grey" onClick={() => setActiveTab(item.id)}>
+                                                                    <h4 className="text-xs text-black uppercase tracking-widest mb-4 text-center h-8 flex items-center justify-center font-normal">{item.label}</h4>
+                                                                    
+                                                                    <div className="relative w-44 h-44 mb-6">
+                                                                        <svg viewBox="0 0 42 42" className="w-full h-full -rotate-90">
+                                                                            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#E5E7EB" strokeWidth="5"></circle>
+                                                                            {gPerc > 0 && <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#007D32" strokeWidth="5" strokeDasharray={`${gPerc} ${100 - gPerc}`} strokeDashoffset="0"></circle>}
+                                                                            {aPerc > 0 && <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#D97700" strokeWidth="5" strokeDasharray={`${aPerc} ${100 - aPerc}`} strokeDashoffset={`-${gPerc}`}></circle>}
+                                                                            {rPerc > 0 && <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#E03C31" strokeWidth="5" strokeDasharray={`${rPerc} ${100 - rPerc}`} strokeDashoffset={`-${gPerc + aPerc}`}></circle>}
+                                                                        </svg>
+                                                                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                                                                            <span className="text-4xl text-ucl-purple tracking-tighter">{count}</span>
+                                                                        </div>
+                                                                    </div>
+
+                                                                    <div className="flex flex-col gap-3 w-full text-[10px] uppercase tracking-widest font-normal">
+                                                                        <div className="flex justify-between items-center border-b border-gray-200 pb-1">
+                                                                            <span className="text-[#007D32]">On Track</span>
+                                                                            <span className="text-black">{gCount}</span>
+                                                                        </div>
+                                                                        <div className="flex justify-between items-center border-b border-gray-200 pb-1">
+                                                                            <span className="text-[#D97700]">Needs Attn</span>
+                                                                            <span className="text-black">{aCount}</span>
+                                                                        </div>
+                                                                        <div className="flex justify-between items-center">
+                                                                            <span className="text-[#E03C31]">At Risk</span>
+                                                                            <span className="text-black">{rCount}</span>
+                                                                        </div>
+                                                                    </div>
                                                                 </div>
-                                                                <div className="w-full bg-gray-100 h-1 overflow-hidden">
-                                                                    <div className="h-full bg-black group-hover:bg-ucl-purple transition-all duration-500" style={{ width: `${perc * 3}%` }}></div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ) : (
+                                                    <div className="space-y-8">
+                                                        {getActiveNavItems().map(item => {
+                                                            const groupProjects = filteredProjects.filter(p => {
+                                                                if (navMode === 'theme') return p.theme === item.id;
+                                                                if (navMode === 'category') return p.cat === item.id;
+                                                                return false;
+                                                            });
+                                                            
+                                                            const count = groupProjects.length;
+                                                            const gCount = groupProjects.filter(p => p.rag === 'G').length;
+                                                            const aCount = groupProjects.filter(p => p.rag === 'A').length;
+                                                            const rCount = groupProjects.filter(p => p.rag === 'R').length;
+                                                            
+                                                            // DEV NOTE: Using maxCategoryCount to scale bars proportionately to the largest category
+                                                            const gPerc = (gCount / maxCategoryCount) * 100;
+                                                            const aPerc = (aCount / maxCategoryCount) * 100;
+                                                            const rPerc = (rCount / maxCategoryCount) * 100;
+
+                                                            return (
+                                                                <div key={item.id} className="group cursor-pointer" onClick={() => setActiveTab(item.id)}>
+                                                                    <div className="flex justify-between items-center mb-3 gap-4">
+                                                                        <span className="text-sm text-black uppercase tracking-widest truncate">{item.label}</span>
+                                                                        <div className="flex gap-3 text-[10px] font-normal whitespace-nowrap">
+                                                                            {gCount > 0 && <span className="text-[#007D32]">{gCount} On Track</span>}
+                                                                            {aCount > 0 && <span className="text-[#D97700]">{aCount} Needs Attn</span>}
+                                                                            {rCount > 0 && <span className="text-[#E03C31]">{rCount} At Risk</span>}
+                                                                            {count === 0 && <span className="text-gray-400">0 Projects</span>}
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="w-full bg-gray-100 h-2 flex gap-[2px] overflow-hidden rounded-sm">
+                                                                        <div className="h-full bg-[#007D32] transition-all duration-500" style={{ width: `${gPerc}%` }}></div>
+                                                                        <div className="h-full bg-[#D97700] transition-all duration-500" style={{ width: `${aPerc}%` }}></div>
+                                                                        <div className="h-full bg-[#E03C31] transition-all duration-500" style={{ width: `${rPerc}%` }}></div>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            {navMode !== 'team' && (
+                                                <div>
+                                                    <h3 className="text-2xl text-black mb-8 border-b border-black pb-4">Governance Milestones</h3>
+                                                    <div className="space-y-4">
+                                                        {[{ name: 'PCC', date: '20 APR', focus: 'Promotions Pilot' }, { name: 'RIGE-C', date: '21 APR', focus: 'UCL-wide Roll-out' }].map((gov, i) => (
+                                                            <div key={i} className="flex items-center p-6 border border-gray-300 hover:border-ucl-purple transition-colors">
+                                                                <div className="w-24 border-r border-gray-300 mr-6 text-sm text-ucl-purple font-normal">{gov.date}</div>
+                                                                <div className="flex-1">
+                                                                    <p className="text-sm text-black font-normal">{gov.name}</p>
+                                                                    <p className="text-[10px] text-gray-500 uppercase tracking-widest mt-1 font-normal">{gov.focus}</p>
                                                                 </div>
                                                             </div>
-                                                        );
-                                                    })}
+                                                        ))}
+                                                    </div>
                                                 </div>
-                                            </div>
-                                            <div>
-                                                <h3 className="text-2xl text-black mb-8 border-b border-black pb-4">Governance Milestones</h3>
-                                                <div className="space-y-4">
-                                                    {[{ name: 'PCC', date: '20 APR', focus: 'Promotions Pilot' }, { name: 'RIGE-C', date: '21 APR', focus: 'UCL-wide Roll-out' }].map((gov, i) => (
-                                                        <div key={i} className="flex items-center p-6 border border-gray-300 hover:border-ucl-purple transition-colors">
-                                                            <div className="w-24 border-r border-gray-300 mr-6 text-sm text-ucl-purple font-normal">{gov.date}</div>
-                                                            <div className="flex-1">
-                                                                <p className="text-sm text-black font-normal">{gov.name}</p>
-                                                                <p className="text-[10px] text-gray-500 uppercase tracking-widest mt-1 font-normal">{gov.focus}</p>
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
+                                            )}
                                         </div>
                                     </>
                                 )}
@@ -689,11 +798,11 @@
                                 </div>
                             </div>
                         ) : (
-                            /* DEV NOTE: Detail view for specific Themes or Categories */
+                            /* DEV NOTE: Detail view for specific Themes, Categories or Teams */
                             <div className="space-y-8 animate-in fade-in duration-300">
                                 <div className="flex flex-col md:flex-row justify-between items-center gap-8 mb-10 pb-6 border-b border-gray-300">
                                     <h2 className="text-3xl text-black tracking-tight">
-                                        {navMode === 'theme' ? themes.find(t => t.id === activeTab)?.label : categories.find(c => c.id === activeTab)?.label}
+                                        {getActiveNavItems().find(t => t.id === activeTab)?.label || activeTab}
                                     </h2>
                                 </div>
                                 <div className="border border-gray-300 overflow-hidden">
@@ -703,6 +812,7 @@
                                                 <tr>
                                                     <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 w-32 font-normal">Status</th>
                                                     <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 min-w-[280px] font-normal">Project Title</th>
+                                                    <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 text-center font-normal">Team</th>
                                                     <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 text-center font-normal">Lead</th>
                                                     <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 text-center font-normal">Contributors</th>
                                                     <th className="px-6 py-5 text-[10px] uppercase tracking-[0.2em] text-gray-500 font-normal">Upcoming Activity</th>
@@ -710,7 +820,7 @@
                                             </thead>
                                             <tbody className="divide-y divide-gray-200">
                                                 {filteredProjects.length === 0 ? (
-                                                    <tr><td colSpan="5" className="px-6 py-20 text-center text-gray-400 text-xs uppercase tracking-widest font-normal">No matches found in portfolio</td></tr>
+                                                    <tr><td colSpan="6" className="px-6 py-20 text-center text-gray-400 text-xs uppercase tracking-widest font-normal">No matches found in portfolio</td></tr>
                                                 ) : filteredProjects.map(p => (
                                                     <tr key={p.id} className="hover:bg-gray-50 transition-colors">
                                                         <td className="px-6 py-6">
@@ -729,7 +839,12 @@
                                                             </button>
                                                         </td>
                                                         <td className="px-6 py-6 text-center">
-                                                            <span className="inline-block px-4 py-1.5 bg-ucl-grey border border-gray-300 text-black text-[10px] uppercase tracking-widest font-normal">
+                                                            <span className="inline-block px-3 py-1 bg-gray-100 text-gray-600 rounded text-[10px] uppercase tracking-widest font-normal">
+                                                                {p.team}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-6 text-center">
+                                                            <span className={`inline-block px-4 py-1.5 border text-[10px] uppercase tracking-widest font-normal ${p.lead === 'TBD' || p.lead === 'TBC' ? 'bg-[#FFF0F0] border-[#E03C31] text-[#E03C31]' : 'bg-ucl-grey border-gray-300 text-black'}`}>
                                                                 {p.lead}
                                                             </span>
                                                         </td>
@@ -761,10 +876,14 @@
                                         <span className="text-[10px] text-gray-500 uppercase tracking-widest font-normal">{selectedProject.cat}</span>
                                     </div>
                                     <h2 className="text-3xl text-black tracking-tight mb-6">{selectedProject.name}</h2>
-                                    <div className="grid grid-cols-2 gap-6 text-xs text-gray-600 font-normal">
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-xs text-gray-600 font-normal">
+                                        <div>
+                                            <p className="uppercase tracking-widest text-[10px] text-gray-400 mb-1">Team</p>
+                                            <p className="text-black">{selectedProject.team}</p>
+                                        </div>
                                         <div>
                                             <p className="uppercase tracking-widest text-[10px] text-gray-400 mb-1">Project Lead</p>
-                                            <p className="text-black">{selectedProject.lead}</p>
+                                            <p className={selectedProject.lead === 'TBD' || selectedProject.lead === 'TBC' ? 'text-[#E03C31]' : 'text-black'}>{selectedProject.lead}</p>
                                         </div>
                                         <div>
                                             <p className="uppercase tracking-widest text-[10px] text-gray-400 mb-1">Contributors</p>
